@@ -1,81 +1,101 @@
 # Deployment Information
 
-> Agent được deploy là agent Part 6 trong `06-lab-complete/` (PASS 12/12), kèm Redis trên cùng nền tảng.
+> Agent được deploy là agent Part 6 trong `06-lab-complete/` (`check_production_ready.py`: PASS 12/12), kèm Redis (Render Key Value) trên cùng nền tảng.
 
 ## Public URL
 
-<!-- TODO(bạn): dán URL sau khi deploy, vd https://day14-agent-production.up.railway.app -->
-https://YOUR-AGENT-URL
+https://day14-agent-6q0z.onrender.com
 
 ## Platform
 
-<!-- TODO(bạn): Railway hoặc Render -->
-Railway
+**Render** — Blueprint từ `06-lab-complete/render.yaml`, gói Free:
 
-## Cách deploy (Railway)
+| Resource | Loại | Vai trò |
+|---|---|---|
+| `day14-agent` | Web Service, runtime Docker, `rootDir: 06-lab-complete` | Agent FastAPI, build bằng `Dockerfile` multi-stage, health check `/health` |
+| `day14-redis` | Key Value (Redis), `ipAllowList: []` | State của rate limiter và cost guard; chỉ service nội bộ Render truy cập được |
 
-```bash
-cd 06-lab-complete
-railway login
-railway init                      # tạo project mới
-railway add --database redis      # tạo Redis trong cùng project
-railway up                        # build bằng Dockerfile (railway.toml: builder = "DOCKERFILE")
-railway domain                    # tạo public URL
-```
+## Cách deploy
 
-Trên dashboard, service agent → **Variables**:
-
-| Biến | Giá trị |
-|---|---|
-| `AGENT_API_KEY` | chuỗi bí mật tự chọn (không ghi vào repo) |
-| `REDIS_URL` | `${{Redis.REDIS_URL}}` (biến tham chiếu tới service Redis) |
-| `ENVIRONMENT` | `production` |
-| `RATE_LIMIT_PER_MINUTE` | `10` |
-| `DAILY_BUDGET_USD` | `1.0` |
-| `MONTHLY_BUDGET_USD` | `10.0` |
-| `PORT` | do Railway tự cấp — CMD của Dockerfile lắng nghe `${PORT:-8000}` |
-
-Healthcheck của Railway gọi `/health` (`railway.toml`).
-
-*(Dùng Render thay thế: New → Blueprint → chọn repo, Render đọc `06-lab-complete/render.yaml`, tạo web service + Key Value (Redis) và nối `REDIS_URL` tự động; chỉ cần nhập `AGENT_API_KEY` vì khai báo `sync: false`.)*
+1. Push code lên GitHub (repo public).
+2. Render Dashboard → **New +** → **Blueprint** → chọn repo, branch `main`.
+3. **Blueprint Path:** `06-lab-complete/render.yaml` (file không nằm ở gốc repo).
+4. Nhập giá trị cho `AGENT_API_KEY` khi được hỏi (biến khai báo `sync: false` nên giá trị không nằm trong repo).
+5. **Deploy Blueprint** → Render tạo `day14-redis`, build image và chạy `day14-agent`, nối `REDIS_URL` tự động qua `fromService` (`property: connectionString`).
 
 ## Test Commands
 
-Đặt `BASE` là URL public và `AGENT_API_KEY` là key đã đặt trên nền tảng. Mỗi lệnh chỉ in mã HTTP nên chụp ảnh không lộ key.
-
 ```bash
+BASE=https://day14-agent-6q0z.onrender.com
 curl -sS -o /dev/null -w '%{http_code}\n' "$BASE/health"     # 200
 curl -sS -o /dev/null -w '%{http_code}\n' "$BASE/ready"      # 200
 curl -sS -o /dev/null -w '%{http_code}\n' -X POST "$BASE/ask" -H 'Content-Type: application/json' -d '{"question":"Hello"}'   # 401
 curl -sS -o /dev/null -w '%{http_code}\n' -X POST "$BASE/ask" -H 'Content-Type: application/json' -H "X-API-Key: $AGENT_API_KEY" -d '{"question":"Hello"}'   # 200
 ```
 
-Kết quả:
+Kết quả thực tế (25/11/2026):
 
 ```
-<!-- TODO(bạn): dán 4 dòng mã HTTP thực tế: 200 / 200 / 401 / 200 -->
+/health                 → 200   {"status":"ok","environment":"production"}
+/ready                  → 200   {"status":"ready","redis":"ok"}
+/ask không có key       → 401
+/ask sai key            → 401   {"detail":"Missing or invalid API key"}
+/ask có key đúng        → 200   {"question":"What is deployment?","answer":"Deployment là quá trình đưa code từ máy bạn lên server để người khác dùng được."}
 ```
 
-Rate limit (gọi 12 lần, từ lần thứ 11 phải là 429):
+`/ready` trả `"redis":"ok"` xác nhận agent đã kết nối được Redis trên Render (readiness ping Redis, Redis lỗi thì trả 503).
+
+Kiểm tra bằng script chấm:
+
+```
+$ python check_production_ready.py --static-only --public-url https://day14-agent-6q0z.onrender.com
+✅ 12. Public URL ready (Railway / Render config)
+     ✅ render.yaml: web service + healthCheckPath /health
+     ✅ render.yaml: secret không ghi thẳng giá trị (generateValue / sync: false)
+     ✅ App lắng nghe theo biến PORT do platform cấp
+     ✅ Public URL: GET https://day14-agent-6q0z.onrender.com/health → 200
+```
+
+Rate limit (giới hạn `RATE_LIMIT_PER_MINUTE=10`, state trong Redis):
 
 ```bash
 for i in $(seq 1 12); do curl -sS -o /dev/null -w "$i: %{http_code}\n" -X POST "$BASE/ask" -H 'Content-Type: application/json' -H "X-API-Key: $AGENT_API_KEY" -d '{"question":"Hello"}'; done
 ```
 
-Kiểm tra bằng script chấm:
-
-```bash
-cd 06-lab-complete && python check_production_ready.py --public-url "$BASE"
 ```
+1: 200
+2: 200
+3: 200
+4: 200
+5: 200
+6: 200
+7: 200
+8: 200
+9: 200
+10: 429
+11: 429
+12: 429
+
+$ curl -i ... (request tiếp theo)
+HTTP/1.1 429 Too Many Requests
+retry-after: 51
+{"detail":"Rate limit exceeded: 10 requests per 60s"}
+```
+
+Request "có key" ngay trước vòng lặp đã tính 1 lượt, nên đúng 10 request thành công trong 60 giây rồi bị chặn 429 kèm `Retry-After`.
+
+> Lưu ý gói Free: web service tự tắt sau 15 phút không có request, request đầu tiên sau đó mất ~1 phút để khởi động lại. Nếu lệnh đầu bị chậm/timeout, gọi lại `/health` rồi chạy tiếp.
 
 ## Environment Variables Set
 
-- `PORT` (platform cấp)
-- `REDIS_URL`
-- `AGENT_API_KEY`
-- `ENVIRONMENT`
-- `RATE_LIMIT_PER_MINUTE`
-- `DAILY_BUDGET_USD`, `MONTHLY_BUDGET_USD`
+| Biến | Nguồn |
+|---|---|
+| `PORT` | Render tự cấp (10000); `CMD` của Dockerfile lắng nghe `${PORT:-8000}` |
+| `REDIS_URL` | `fromService` → connection string nội bộ của `day14-redis` |
+| `AGENT_API_KEY` | Nhập trên dashboard lúc tạo Blueprint (`sync: false`), không có trong repo |
+| `ENVIRONMENT` | `production` |
+| `RATE_LIMIT_PER_MINUTE` | `10` |
+| `DAILY_BUDGET_USD` / `MONTHLY_BUDGET_USD` | `1.0` / `10.0` |
 
 ## Screenshots
 

@@ -172,12 +172,13 @@ Header `Server: nginx` và các security header chứng tỏ request đi qua Ngi
 
 Theo CHECKPOINTS (CP6), lớp K5 deploy thẳng agent Part 6 trong `06-lab-complete/` thay vì app mẫu `03-cloud-deployment/`.
 
-<!-- TODO(bạn): điền sau khi deploy -->
-- Nền tảng chính: Railway
-- URL: https://YOUR-AGENT-URL
-- Redis: Redis service trên cùng project, `REDIS_URL` của agent trỏ tới nó; `/ready` trả 200
-- `AGENT_API_KEY` đặt bằng biến môi trường trên nền tảng, không ghi trong code
-- Kết quả 4 lệnh tự kiểm (`/health`, `/ready`, `/ask` không key, `/ask` có key): `200 / 200 / 401 / 200`
+- Nền tảng chính: **Render** (Exercise 3.2), Blueprint `06-lab-complete/render.yaml` (Blueprint Path đặt thủ công vì file không ở gốc repo)
+- URL: **https://day14-agent-6q0z.onrender.com**
+- Redis: Render Key Value `day14-redis`, `REDIS_URL` của agent nối qua `fromService` (connection string nội bộ); `/ready` trả `{"status":"ready","redis":"ok"}`
+- `AGENT_API_KEY` khai báo `sync: false`, nhập trên dashboard lúc tạo Blueprint, không ghi trong code/repo
+- Kết quả 4 lệnh tự kiểm: `/health` → 200, `/ready` → 200, `/ask` không key → 401, `/ask` có key → 200; vượt 10 request/phút → 429 (`Retry-After: 51`)
+- `check_production_ready.py --public-url https://day14-agent-6q0z.onrender.com` → `✅ Public URL: GET .../health → 200`
+- Nền tảng còn lại (Railway): không deploy, thay bằng phần so sánh `railway.toml` / `render.yaml` bên dưới
 - Chi tiết lệnh và ảnh: [DEPLOYMENT.md](DEPLOYMENT.md), `screenshots/dashboard.png`, `running.png`, `test.png`
 
 ### So sánh `railway.toml` và `render.yaml` (06-lab-complete)
